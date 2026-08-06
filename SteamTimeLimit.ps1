@@ -1,5 +1,18 @@
 using namespace System.Collections.Generic
 
+
+# ------ Configurable variables ------
+
+
+$PlaytimeLimit = New-TimeSpan -Minutes 60
+$ResetInterval = New-TimeSpan -Minutes 360
+
+$StatePath = "$PSScriptRoot\State.json"
+$Verbose = $true
+
+
+# ------ Application management functions ------
+
 function Get-LineValue($Line, $Header) 
 {
     if ($Line -match "`"$Header`"\s+`"([^`"]+)`"")
@@ -102,37 +115,129 @@ function Stop-AnyGameRunning($GamesInfo)
 }
 
 
+# ------ Time management functions ------
+
+function Get-LastResetStart($ResetInterval)
+{
+    $Now = Get-Date
+
+    [long]$RoundedTicks =
+        [Math]::Floor($Now.Ticks / $ResetInterval.Ticks) *
+        $ResetInterval.Ticks
+
+    return [DateTime]::new($RoundedTicks)
+}
+
+function Restore-State($StatePath)
+{
+    if (Test-Path $StatePath)
+    {
+        try
+        {$State = Get-Content $StatePath -Raw | ConvertFrom-Json}
+        catch
+        {$State = $null}
+    }
+    else 
+    {$State = $null}
+
+    $Now = Get-Date
+    # Saved LastResetTime is only needed once to determine if ResetInterval time passed during offtime
+    if ( ($null -eq $State) -or (($Now - $State.LastResetTime) -ge $ResetInterval) )
+    {$Playtime = [TimeSpan]::Zero}
+    else 
+    {$Playtime = [TimeSpan]::FromTicks($State.PlayTime)}
+    if ($null -eq $Playtime) {$Playtime = [TimeSpan]::Zero}
+
+    # Recalculate LastResetTime in case of ResetInterval change
+    $LastResetTime = Get-LastResetStart $ResetInterval
+
+    return [PSCustomObject]@{
+        Playtime = $Playtime
+        LastResetTime = $LastResetTime
+    }
+}
+
+function Save-State($StatePath, $State) 
+{
+    $StateJson = $State | ConvertTo-Json
+    $StateJson | Set-Content -Path $StatePath
+}
+
+
 # ------ Main script ------
+
 
 $GamesInfo = Get-AllGamesInfo
 
-$Playtime = [TimeSpan]::Zero
+$RestoredState = Restore-State $StatePath
+$Playtime = $RestoredState.Playtime
+$LastResetTime = $RestoredState.LastResetTime
+
+if ($Verbose) 
+{
+    "Restored playtime: $Playtime"
+    "Restored last reset time: $LastResetTime"
+}
+
 $PreviousTime = Get-Date
-$Limit = New-TimeSpan -Minutes 2
+$Cycles = 0
 
 while ($true) 
 {
-    if ($Playtime -lt $Limit)
+    $Cycles++
+    $CurrentTime = Get-Date
+
+    if ($Verbose) 
     {
-        $CurrentTime = Get-Date
+        "------------------------------------------------"
+        "Playtime: $Playtime"
+    }
+
+    # Test if games are running, increase playtime if yes
+    if ($Playtime -lt $PlaytimeLimit)
+    {
         $Elapsed = $CurrentTime - $PreviousTime
         $PreviousTime = $CurrentTime
 
         if (Test-AnyGameRunning -GamesInfo $GamesInfo) 
         {
-            $PlayTime += $Elapsed
-            "Games are running"
+            $Playtime += $Elapsed
+            if ($Verbose) {"Games are running"}
         }
         else 
-        {"Games aren't running"}
+        {if ($Verbose) {"Games aren't running"}}
     }
+    # Block games after playtime limit is passed
     else
     {
-        "Limit reached"
-        Stop-AnyGameRunning -GamesInfo $GamesInfo
-        Start-Sleep 20
+        if ($Verbose) {"Playtime limit reached"}
+        if (($Cycles % 4) -eq 0)
+        {Stop-AnyGameRunning -GamesInfo $GamesInfo}
     }
 
-    Start-Sleep 10
+    # Reset playtime after specified interval
+    $TimeSinceLastReset = $CurrentTime - $LastResetTime
+    $TimeUntilNextReset = -($TimeSinceLastReset - $ResetInterval)
+    if ($Verbose) {"Time since last reset: $TimeSinceLastReset"}
+    if ($Verbose) {"Time until next reset: $TimeUntilNextReset"}
+
+    if ($TimeSinceLastReset -ge $ResetInterval) 
+    {
+        if ($Verbose) {"Playtime reset"}
+        $Playtime = [TimeSpan]::Zero
+        $LastResetTime = Get-LastResetStart $ResetInterval
+    }
+
+    # Save state as JSON
+    if (($Cycles % 2) -eq 0) 
+    {
+        $SaveState = [PSCustomObject]@{
+            Playtime = $Playtime.Ticks # Powershell can't directly restore TimeSpan from json
+            LastResetTime = $LastResetTime
+        }
+        Save-State -StatePath $StatePath -State $SaveState
+    }
+
+    Start-Sleep 15
 }
 
