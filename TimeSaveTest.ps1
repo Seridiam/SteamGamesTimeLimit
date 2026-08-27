@@ -2,6 +2,16 @@ $Limit = New-TimeSpan -Minutes 1
 $ResetInterval = New-TimeSpan -Minutes 2
 
 
+function Get-LastResetStart($ResetInterval)
+{
+    $Now = Get-Date
+
+    [long]$RoundedTicks =
+        [Math]::Floor($Now.Ticks / $ResetInterval.Ticks) *
+        $ResetInterval.Ticks
+
+    return [DateTime]::new($RoundedTicks)
+}
 
 # ------ Main script ------
 

@@ -5,4 +5,4 @@ Currently there is no user interface, so modifying parametres is done by editing
 Also the script won't persist between power cycles, but it will save relevant data, so simply running the top command again will do.
 
 Obviously this won't stay like this and will be fully fledged as soon as possible.
-Developed only by me :)
+Developed only by me :) (Seridiam on GitHub)

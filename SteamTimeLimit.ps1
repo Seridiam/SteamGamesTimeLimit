@@ -1,14 +1,32 @@
 using namespace System.Collections.Generic
 
 
+# ------ File management functions ------
+
+$Verbose = $false
+function Write-Log($Message)
+{
+    if (-not $Verbose) {return}
+    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$Timestamp | $Message" | Add-Content -Path $LogPath
+}
+
+function New-FileWithParent($Directory, $FileName) 
+{
+    if (-not (Test-Path $Directory))
+    {New-Item -ItemType Directory -Path $Directory | Out-Null}
+    return Join-Path $Directory $FileName
+}
+
+
 # ------ Configurable variables ------
 
+$StateDirectory = "$PSScriptRoot"
+$StatePath = New-FileWithParent -Directory $StateDirectory -FileName "State.json"
+$LogDirectory = Join-Path "$PSScriptRoot" "Logs"
+$LogPath = New-FileWithParent -Directory $LogDirectory -FileName "SteamTimeLimit.log"
 
-$PlaytimeLimit = New-TimeSpan -Minutes 60
-$ResetInterval = New-TimeSpan -Minutes 360
-
-$StatePath = "$PSScriptRoot\State.json"
-$Verbose = $true
+$ErrorActionPreference = "Stop"
 
 
 # ------ Application management functions ------
@@ -140,20 +158,34 @@ function Restore-State($StatePath)
     else 
     {$State = $null}
 
-    $Now = Get-Date
-    # Saved LastResetTime is only needed once to determine if ResetInterval time passed during offtime
-    if ( ($null -eq $State) -or (($Now - $State.LastResetTime) -ge $ResetInterval) )
+    if ($null -eq $State)
     {$Playtime = [TimeSpan]::Zero}
     else 
-    {$Playtime = [TimeSpan]::FromTicks($State.PlayTime)}
-    if ($null -eq $Playtime) {$Playtime = [TimeSpan]::Zero}
+    {
+        $Now = Get-Date
+
+        $ResetInterval = [TimeSpan]::FromTicks($State.ResetInterval)
+        if ($null -eq $ResetInterval || 0 -eq $ResetInterval.Ticks) {$ResetInterval = New-TimeSpan -Hours 24}
+
+        # Saved LastResetTime is only needed once to determine if ResetInterval time passed during offtime
+        if (($Now - $State.LastResetTime) -ge $ResetInterval)
+        {$Playtime = [TimeSpan]::Zero}
+        else 
+        {$Playtime = [TimeSpan]::FromTicks($State.PlayTime)}
+        if ($null -eq $Playtime) {$Playtime = [TimeSpan]::Zero}
+        
+        $PlaytimeLimit = $State.PlaytimeLimit
+        if ($null -eq $PlaytimeLimit) {$PlaytimeLimit = [TimeSpan]::Zero}
+    }
 
     # Recalculate LastResetTime in case of ResetInterval change
     $LastResetTime = Get-LastResetStart $ResetInterval
 
     return [PSCustomObject]@{
         Playtime = $Playtime
+        PlaytimeLimit = $PlaytimeLimit
         LastResetTime = $LastResetTime
+        ResetInterval = $ResetInterval
     }
 }
 
@@ -167,77 +199,81 @@ function Save-State($StatePath, $State)
 # ------ Main script ------
 
 
-$GamesInfo = Get-AllGamesInfo
-
-$RestoredState = Restore-State $StatePath
-$Playtime = $RestoredState.Playtime
-$LastResetTime = $RestoredState.LastResetTime
-
-if ($Verbose) 
+try 
 {
-    "Restored playtime: $Playtime"
-    "Restored last reset time: $LastResetTime"
-}
+    $GamesInfo = Get-AllGamesInfo
+    $State = Restore-State $StatePath
 
-$PreviousTime = Get-Date
-$Cycles = 0
+    Write-Log "Restored playtime: $($State.Playtime)"
+    Write-Log "Restored playtime limit: $($State.PlaytimeLimit)"
+    Write-Log "Restored last reset time: $($State.LastResetTime)"
+    Write-Log "Restored reset interval: $($State.ResetInterval)"
 
-while ($true) 
-{
-    $Cycles++
-    $CurrentTime = Get-Date
+    $PreviousTime = Get-Date
+    $Cycles = 0
 
-    if ($Verbose) 
+    while ($true) 
     {
-        "------------------------------------------------"
-        "Playtime: $Playtime"
-    }
+        $Cycles++
+        $CurrentTime = Get-Date
 
-    # Test if games are running, increase playtime if yes
-    if ($Playtime -lt $PlaytimeLimit)
-    {
-        $Elapsed = $CurrentTime - $PreviousTime
-        $PreviousTime = $CurrentTime
+        Write-Log "------------------------------------------------"
+        Write-Log "Playtime: $($State.Playtime)"
 
-        if (Test-AnyGameRunning -GamesInfo $GamesInfo) 
+        # Test if games are running, increase playtime if yes
+        if ($State.Playtime -lt $State.PlaytimeLimit)
         {
-            $Playtime += $Elapsed
-            if ($Verbose) {"Games are running"}
+            $Elapsed = $CurrentTime - $PreviousTime
+            $PreviousTime = $CurrentTime
+
+            if (Test-AnyGameRunning -GamesInfo $GamesInfo) 
+            {
+                $State.Playtime += $Elapsed
+                Write-Log "Games are running"
+            }
+            else 
+            {Write-Log "Games aren't running"}
         }
-        else 
-        {if ($Verbose) {"Games aren't running"}}
-    }
-    # Block games after playtime limit is passed
-    else
-    {
-        if ($Verbose) {"Playtime limit reached"}
-        if (($Cycles % 4) -eq 0)
-        {Stop-AnyGameRunning -GamesInfo $GamesInfo}
-    }
-
-    # Reset playtime after specified interval
-    $TimeSinceLastReset = $CurrentTime - $LastResetTime
-    $TimeUntilNextReset = -($TimeSinceLastReset - $ResetInterval)
-    if ($Verbose) {"Time since last reset: $TimeSinceLastReset"}
-    if ($Verbose) {"Time until next reset: $TimeUntilNextReset"}
-
-    if ($TimeSinceLastReset -ge $ResetInterval) 
-    {
-        if ($Verbose) {"Playtime reset"}
-        $Playtime = [TimeSpan]::Zero
-        $LastResetTime = Get-LastResetStart $ResetInterval
-    }
-
-    # Save state as JSON
-    if (($Cycles % 2) -eq 0) 
-    {
-        $SaveState = [PSCustomObject]@{
-            Playtime = $Playtime.Ticks # Powershell can't directly restore TimeSpan from json
-            LastResetTime = $LastResetTime
+        # Block games after playtime limit is passed
+        else
+        {
+            Write-Log "Playtime limit reached"
+            if (($Cycles % 4) -eq 0)
+            {Stop-AnyGameRunning -GamesInfo $GamesInfo}
         }
-        Save-State -StatePath $StatePath -State $SaveState
-    }
 
-    Start-Sleep 15
+        # Reset playtime after specified interval
+        $TimeSinceLastReset = $CurrentTime - $State.LastResetTime
+        $TimeUntilNextReset = -($TimeSinceLastReset - $State.ResetInterval)
+        Write-Log "Time since last reset: $TimeSinceLastReset"
+        Write-Log "Time until next reset: $TimeUntilNextReset"
+
+        if ($TimeSinceLastReset -ge $State.ResetInterval) 
+        {
+            Write-Log "Playtime reset"
+            $State.Playtime = [TimeSpan]::Zero
+            $State.LastResetTime = Get-LastResetStart $State.ResetInterval
+        }
+
+        # Save state as JSON
+        if (($Cycles % 2) -eq 0) 
+        {
+            $SaveState = [PSCustomObject]@{
+                Playtime = $State.Playtime.Ticks # Powershell can't directly restore TimeSpan from json
+                PlaytimeLimit = $State.PlaytimeLimit.Ticks
+                LastResetTime = $State.LastResetTime
+                ResetInterval = $State.ResetInterval.Ticks
+            }
+            Save-State -StatePath $StatePath -State $SaveState
+        }
+
+        Start-Sleep 15
+    }
+}
+catch
+{
+    Write-Log "!-!-!-!-!-!-!-!-!-!-!-!-!-!-!-!-!-!-!-!-!-!-!-!"
+    Write-Log "$($_.Exception.Message)"
+    throw
 }
 
