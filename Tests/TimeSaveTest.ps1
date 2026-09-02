@@ -15,7 +15,7 @@ function Get-LastResetStart($ResetInterval)
 
 # ------ Main script ------
 
-$StatePath = "$PSScriptRoot\State.json"
+$StatePath = "$PSScriptRoot\TimeSaveTestState.json"
 
 if (Test-Path $StatePath)
 {

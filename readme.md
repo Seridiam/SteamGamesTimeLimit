@@ -1,8 +1,15 @@
 This is a tool that allows setting a time limit and reset period for all Steam games.
-Enter the directory where the tool is located on your computer and enter ".\SteamTimeLimit.ps1" in order to run it.
+Cd into the directory where the tool is located on your computer and run
+```
+.\SteamTimeLimit.ps1
+```
+in order to run the tool.
 
-Currently there is no user interface, so modifying parametres is done by editing the variables at the top of SteamTimeLimit.ps1.
-Also the script won't persist between power cycles, but it will save relevant data, so simply running the top command again is enough for proper functioning.
+Modifying parameters is done by cd-ing into the tool's directory and calling
+```
+.\SteamTimeLimitCLI.ps1 Set-PlaytimeLimit -Hours 1 -Minutes 30
+.\SteamTimeLimitCLI.ps1 Get-ResetInterval
+# etc
+```
 
-Obviously this won't stay like this and will be fully fledged as soon as possible.
 Developed only by me :) (Seridiam on GitHub)
