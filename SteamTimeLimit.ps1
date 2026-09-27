@@ -7,7 +7,7 @@ using namespace System.Text
 function Write-Log($Message)
 {
     $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "$Timestamp | $Message" | Add-Content -Path $LogPath
+    "BackgroundTask | $Timestamp | $Message" | Add-Content -Path $LogPath
 }
 
 function New-FileWithParent($Directory, $FileName) 
@@ -30,6 +30,7 @@ $PipeServerDirectory = "$PSScriptRoot"
 $PipeServerPath = New-FileWithParent -Directory $PipeServerDirectory -FileName "PipeServer.ps1"
 
 $PipeName = "SteamTimeLimit"
+$Verbose = $false
 
 
 # ------ Application management ------
@@ -175,7 +176,7 @@ function Restore-State($StatePath)
         if (($null -eq $ResetInterval) -or (0 -eq $ResetInterval.Ticks)) {$ResetInterval = New-TimeSpan -Hours 24}
 
         # Saved LastResetTime is only needed once to determine if ResetInterval time passed during offtime
-        if (($Now - $State.LastResetTime) -ge $ResetInterval)
+        if (-not ($null -eq $State.LastResetTime) -and ($Now - $State.LastResetTime) -ge $ResetInterval)
         {$Playtime = [TimeSpan]::Zero}
         else 
         {$Playtime = [TimeSpan]::FromTicks($State.PlayTime)}
@@ -244,7 +245,7 @@ try
 
     # --- CLI request handling ---
     
-    $PipeJob = Start-ThreadJob -FilePath $PipeServerPath `
+    $PipeServer = Start-ThreadJob -FilePath $PipeServerPath `
     -ArgumentList $State, $PipeName
 
     $PreviousTime = Get-Date
@@ -297,7 +298,8 @@ try
         if (($Cycles % 2) -eq 0) 
         {Save-State -StatePath $StatePath -State $State}
         
-        Write-Log | Receive-Job $PipeJob -Keep
+        Write-Log | Receive-Job $PipeServer -Keep
+
         Start-Sleep 15
     }
 }
@@ -309,10 +311,10 @@ catch
 }
 finally
 {
-    if ($PipeJob)
+    if ($PipeServer)
     {
-        Stop-Job $PipeJob -ErrorAction SilentlyContinue
-        Remove-Job $PipeJob -Force -ErrorAction SilentlyContinue
+        Stop-Job $PipeServer -ErrorAction SilentlyContinue
+        Remove-Job $PipeServer -Force -ErrorAction SilentlyContinue
     }
 
     $Mutex.ReleaseMutex()
